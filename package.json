@@ -17,6 +17,10 @@
 		"point-of-sale",
 		"POS"
 	],
+	"repository": {
+	    "type": "git",
+	    "url": "https://github.com/opensourcepos/opensourcepos"
+	},
 	"scripts": {
 		"build": "gulp default",
 		"gulp": "gulp"
