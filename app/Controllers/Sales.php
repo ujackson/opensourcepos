@@ -20,6 +20,7 @@ use App\Models\Stock_location;
 use App\Models\Tokens\Token_invoice_count;
 use App\Models\Tokens\Token_customer;
 use App\Models\Tokens\Token_invoice_sequence;
+use CodeIgniter\Events\Events;
 use CodeIgniter\HTTP\ResponseInterface;
 use Config\Services;
 use Config\OSPOS;
@@ -75,15 +76,15 @@ class Sales extends Secure_Controller
     /**
      * Load the sale edit modal. Used in app/Views/sales/register.php.
      *
-     * @return ResponseInterface|string
+     * @return string
      * @noinspection PhpUnused
      */
-    public function getManage(): ResponseInterface|string
+    public function getManage(): string
     {
-        $personId = $this->session->get('person_id');
+        $person_id = $this->session->get('person_id');
 
-        if (!$this->employee->has_grant('reports_sales', $personId)) {
-            return redirect()->to('no_access/sales/reports_sales');
+        if (!$this->employee->has_grant('reports_sales', $person_id)) {
+            redirect('no_access/sales/reports_sales');
         } else {
             $data['table_headers'] = get_sales_manage_table_headers();
 
@@ -92,31 +93,18 @@ class Sales extends Secure_Controller
                 'only_due'          => lang('Sales.due_filter'),
                 'only_check'        => lang('Sales.check_filter'),
                 'only_creditcard'   => lang('Sales.credit_filter'),
-                'only_debit'        => lang('Sales.debit'),
                 'only_invoices'     => lang('Sales.invoice_filter'),
                 'selected_customer' => lang('Sales.selected_customer')
             ];
 
             if ($this->sale_lib->get_customer() != -1) {
-                $selectedFilters = ['selected_customer'];
+                $selected_filters = ['selected_customer'];
                 $data['customer_selected'] = true;
             } else {
                 $data['customer_selected'] = false;
-                $selectedFilters = [];
+                $selected_filters = [];
             }
-
-            // Restore filters from URL query string
-            $filters = restoreTableFilters($this->request);
-            if (!empty($filters['selected_filters'])) {
-                $selectedFilters = array_merge($selectedFilters, $filters['selected_filters']);
-            }
-            if (isset($filters['start_date'])) {
-                $data['start_date'] = $filters['start_date'];
-            }
-            if (isset($filters['end_date'])) {
-                $data['end_date'] = $filters['end_date'];
-            }
-            $data['selected_filters'] = $selectedFilters;
+            $data['selected_filters'] = $selected_filters;
 
             return view('sales/manage', $data);
         }
@@ -155,7 +143,6 @@ class Sales extends Secure_Controller
             'only_check'        => false,
             'selected_customer' => false,
             'only_creditcard'   => false,
-            'only_debit'        => false,
             'only_invoices'     => $this->config['invoice_enable'] && $this->request->getGet('only_invoices', FILTER_SANITIZE_NUMBER_INT),
             'is_valid_receipt'  => $this->sale->is_valid_receipt($search)
         ];
@@ -470,6 +457,13 @@ class Sales extends Secure_Controller
                 $this->sale_lib->add_payment($payment_type, $amount_tendered);
             }
         }
+
+        Events::trigger('payment_initiated', [
+            'payment_type' => $payment_type,
+            'amount' => $amount_tendered ?? 0,
+            'sale_id' => $this->sale_lib->get_sale_id(),
+            'customer_id' => $this->sale_lib->get_customer(),
+        ]);
 
         return $this->_reload($data);
     }
@@ -819,8 +813,18 @@ class Sales extends Secure_Controller
                     $data['error_message'] = lang('Sales.transaction_failed');
                 } else {
                     $data['barcode'] = $this->barcode_lib->generate_receipt_barcode($data['sale_id']);
-                    $this->sale_lib->clear_all();
+                    
+                    Events::trigger('sale_completed', [
+                        'sale_id' => $data['sale_id_num'],
+                        'customer_id' => $customer_id,
+                        'employee_id' => $employee_id,
+                        'total' => $data['total'],
+                        'payments' => $data['payments'],
+                        'sale_type' => $sale_type,
+                    ]);
+                    
                     return view('sales/' . $invoice_view, $data);
+                    $this->sale_lib->clear_all();
                 }
             }
         } elseif ($this->sale_lib->is_work_order_mode()) {
@@ -853,8 +857,9 @@ class Sales extends Secure_Controller
 
                 $data['barcode'] = null;
 
-                $this->sale_lib->clear_all();
                 return view('sales/work_order', $data);
+                $this->sale_lib->clear_mode();
+                $this->sale_lib->clear_all();
             }
         } elseif ($this->sale_lib->is_quote_mode()) {
             $data['sales_quote'] = lang('Sales.quote');
@@ -880,8 +885,9 @@ class Sales extends Secure_Controller
                 $data['cart'] = $this->sale_lib->sort_and_filter_cart($data['cart']);
                 $data['barcode'] = null;
 
-                $this->sale_lib->clear_all();
                 return view('sales/quote', $data);
+                $this->sale_lib->clear_mode();
+                $this->sale_lib->clear_all();
             }
         } else {
             // Save the data to the sales table
@@ -902,8 +908,18 @@ class Sales extends Secure_Controller
                 $data['error_message'] = lang('Sales.transaction_failed');
             } else {
                 $data['barcode'] = $this->barcode_lib->generate_receipt_barcode($data['sale_id']);
-                $this->sale_lib->clear_all();
+                
+                Events::trigger('sale_completed', [
+                    'sale_id' => $data['sale_id_num'],
+                    'customer_id' => $customer_id,
+                    'employee_id' => $employee_id,
+                    'total' => $data['total'],
+                    'payments' => $data['payments'],
+                    'sale_type' => $sale_type,
+                ]);
+                
                 return view('sales/receipt', $data);
+                $this->sale_lib->clear_all();
             }
         }
     }
